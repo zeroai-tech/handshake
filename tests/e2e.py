@@ -71,6 +71,22 @@ def run(args, **kw):
 
 print("\n  Handshake end-to-end\n")
 
+# ── the launcher, reached the way users actually reach it ───────────────────
+# `handshake` is a symlink on PATH. An earlier version derived its install
+# directory from the symlink's location instead of the real file, so it worked
+# when run directly and failed for every installed user.
+import shutil                                                     # noqa: E402
+_link_dir = tempfile.mkdtemp(prefix="handshake-bin-")
+_link = os.path.join(_link_dir, "handshake")
+os.symlink(str(ROOT / "bin" / "handshake"), _link)
+_r = subprocess.run([_link, "--version"], capture_output=True, text=True, timeout=60)
+check("launcher works through a symlink", "handshake" in _r.stdout, _r.stdout + _r.stderr)
+_link2 = os.path.join(_link_dir, "handshake2")
+os.symlink(_link, _link2)
+_r = subprocess.run([_link2, "--version"], capture_output=True, text=True, timeout=60)
+check("launcher follows a chain of symlinks", "handshake" in _r.stdout, _r.stdout + _r.stderr)
+shutil.rmtree(_link_dir, ignore_errors=True)
+
 # ── init ────────────────────────────────────────────────────────────────────
 secret_box = {}
 

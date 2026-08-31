@@ -25,6 +25,31 @@ jobs:
         env:
           HANDSHAKE_TEST_PYTHON: python
 
+  install:
+    # The installer is the first thing every user runs; a break here is a
+    # break for everyone, so exercise the real script end to end.
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: install from this checkout
+        run: |
+          set -euo pipefail
+          bash install.sh
+        env:
+          HANDSHAKE_APP: ${{ runner.temp }}/hs-app
+          HANDSHAKE_BIN: ${{ runner.temp }}/hs-bin
+      - name: the installed binary runs, through its symlink
+        run: |
+          set -euo pipefail
+          "${{ runner.temp }}/hs-bin/handshake" --version
+          HANDSHAKE_HOME="${{ runner.temp }}/hs-home" \
+          HANDSHAKE_BACKEND=sqlite \
+          HANDSHAKE_SQLITE_PATH="${{ runner.temp }}/hs.db" \
+            "${{ runner.temp }}/hs-bin/handshake" status
+
   no-secrets:
     runs-on: ubuntu-latest
     steps:

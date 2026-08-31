@@ -1,10 +1,23 @@
 #!/usr/bin/env bash
 # Run Handshake from a clone, with or without a virtualenv.
 #
-# Prefers the repo's own .venv (how a clone is usually set up), then an
+# Prefers the repo's own .venv (how the installer sets it up), then any
 # interpreter that already has `cryptography`, so `pip install -e .` works too.
 set -euo pipefail
-HS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# This script is normally reached through a symlink on PATH, so resolve the
+# link chain before deriving the install directory — otherwise we look for the
+# venv next to the symlink instead of next to the real file. Done by hand
+# because BSD readlink has no -f.
+SELF="${BASH_SOURCE[0]}"
+while [ -L "$SELF" ]; do
+  LINK="$(readlink "$SELF")"
+  case "$LINK" in
+    /*) SELF="$LINK" ;;
+    *)  SELF="$(cd "$(dirname "$SELF")" && pwd)/$LINK" ;;
+  esac
+done
+HS_DIR="$(cd "$(dirname "$SELF")/.." && pwd)"
 
 if [ -x "$HS_DIR/.venv/bin/python" ]; then
   exec "$HS_DIR/.venv/bin/python" "$HS_DIR/handshake.py" "$@"
@@ -14,6 +27,6 @@ for py in python3 python; do
     exec "$py" "$HS_DIR/handshake.py" "$@"
   fi
 done
-echo "  Handshake needs Python 3.10+ with 'cryptography'. Set it up with:" >&2
-echo "    python3 -m venv $HS_DIR/.venv && $HS_DIR/.venv/bin/pip install -e $HS_DIR" >&2
+echo "  Handshake needs Python 3.10+ with 'cryptography'. Reinstall with:" >&2
+echo "    curl -fsSL https://raw.githubusercontent.com/zeroai-tech/handshake/main/install.sh | bash" >&2
 exit 1
