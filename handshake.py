@@ -163,18 +163,45 @@ def cmd_init(a):
     if not totp.verify(tsec, code):
         _die("That code did not verify — nothing was created. Try again.")
 
+    # The image is the second factor sitting in the filesystem. It has done its
+    # job the moment a code verifies, so remove it rather than trusting anyone
+    # to remember to.
+    if a.qr_file:
+        try:
+            Path(a.qr_file).expanduser().unlink()
+            print("  (QR image deleted — it had served its purpose)")
+        except OSError:
+            print(f"  ! could not delete {a.qr_file} — remove it yourself.")
+
     db.put_vault(salt=crypto.b64e(salt), verifier=crypto.verifier(kek, salt),
                  totp_enc=crypto.seal(kek, tsec.encode(), aad=b"totp"),
                  created_at=int(time.time()))
 
     shares = crypto.split_secret(kek, 3, 2)
-    print("\n  ── RECOVERY SHARES ──────────────────────────────────────────")
-    print("  Any TWO of these three rebuild the vault if you forget the")
-    print("  passphrase or lose your phone. Any ONE alone is useless —")
-    print("  that is arithmetic, not a promise about how you store them.")
-    print("  They are generated once and kept nowhere. Print them.\n")
-    for i, s in enumerate(shares, 1):
-        print(f"    share {i}:  {s}\n")
+    print("\n" + "  " + "=" * 62)
+    print("  ABOUT TO SHOW YOUR RECOVERY KEY")
+    print("  " + "=" * 62)
+    print("""
+  What comes next is not a backup code. Any TWO of the three shares
+  rebuild your master key WITHOUT your passphrase and WITHOUT your
+  authenticator. Together they are the vault.
+
+  So the only safe place for them is off this computer:
+
+      · photograph them with your phone, or
+      · write them down, or
+      · print them
+
+  Do NOT paste this screen anywhere. Not into a chat or an AI
+  assistant, not a password manager note, not a support ticket, not a
+  screenshot you keep. Anywhere you paste it, someone owns your vault.
+
+  Keep the three apart. Any one alone is mathematically useless.
+""")
+    input("  Press Enter when you are ready to see them. ")
+    print("\n  ── RECOVERY SHARES ──────────────────────────────────────────\n")
+    for i, sh in enumerate(shares, 1):
+        print(f"    share {i}:  {sh}\n")
     print("  ── WHERE THE VAULT LIVES ────────────────────────────────────")
     print("  The shares rebuild the key, not the address. On a fresh")
     print("  machine you need both. Recreate this with: handshake connect\n")
@@ -183,6 +210,9 @@ def cmd_init(a):
         print(f"    {k:<12}: {v}")
     print(f"    backend     : {name}\n")
     print("  ─────────────────────────────────────────────────────────────")
+    print("\n  This is the only time any of it is shown. It is stored nowhere.")
+    while input('  Type "saved" once it is safely off this machine: ').strip().lower() != "saved":
+        print("  Take the photograph first — there is no way to get this back.")
     db.log(int(time.time()), "init", None, session.public_ip(), True, None)
     print("\n  Vault created. Next: handshake unlock\n")
 

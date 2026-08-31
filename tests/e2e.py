@@ -104,12 +104,15 @@ out = interact(["init", "--account", "e2e"], [
     ("Choose a passphrase", PASS),
     ("Repeat it", PASS),
     ("6-digit code", grab_totp),
+    ("Press Enter when you are ready", ""),
+    ('Type "saved"', "saved"),
 ])
 check("init creates the vault", "Vault created" in out, out[-400:])
 check("init prints recovery shares", out.count("share ") >= 3)
 check("init prints where the vault lives", "WHERE THE VAULT LIVES" in out)
 shares = re.findall(r"share \d:\s+(\d+-[A-Za-z0-9+/=]+)", out)
 check("three shares captured", len(shares) == 3, str(len(shares)))
+out2_first = out
 S = secret_box.get("s")
 check("totp secret captured", bool(S))
 
@@ -124,6 +127,10 @@ if not S or "Vault created" not in out:
 # ── init is not repeatable without --force ──────────────────────────────────
 out = interact(["init"], [("Choose a passphrase", PASS)])
 check("second init refuses", "already exists" in out, out[-200:])
+
+check("init warns against pasting the shares", "Do NOT paste this screen" in out2_first,
+      "warning text missing from init output")
+check("init requires an explicit acknowledgement", "saved" in out2_first.lower())
 
 from hsvault import totp  # noqa: E402
 

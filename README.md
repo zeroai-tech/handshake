@@ -104,6 +104,16 @@ Then it prints a **recovery card**: three recovery shares plus the address of
 your vault. Photograph it or print it before you close the window — the shares
 are generated once and stored nowhere, by anyone, including us.
 
+> **The shares are not a backup code — they are the vault.** Any two of them
+> rebuild your master key with no passphrase and no authenticator. Get them off
+> the machine (a photo, paper, a printer) and keep the three apart. Never paste
+> that screen anywhere: not into a chat or an AI assistant, not a note in your
+> password manager, not a support ticket. Anywhere it lands, someone owns your
+> vault. Setup makes you confirm you have saved them before it continues.
+>
+> If they ever do leak and the vault is still empty or small, the fix is quick:
+> `handshake init --force` mints a fresh key and fresh shares.
+
 > **Why can't this be fully automated?** Because the point of the tool is that
 > a machine cannot open your vault alone. The passphrase has to come out of
 > your head and the code has to come off your phone. If a script could do it,
