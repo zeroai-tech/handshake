@@ -97,6 +97,14 @@ check("three shares captured", len(shares) == 3, str(len(shares)))
 S = secret_box.get("s")
 check("totp secret captured", bool(S))
 
+# Everything after this needs a working vault. Without one the remaining
+# checks all fail for the same reason and bury the real cause, so stop here.
+if not S or "Vault created" not in out:
+    print("\n  init failed — the rest of the suite cannot run.")
+    print("  Last output from init:\n")
+    print("\n".join("    " + l for l in out.strip().splitlines()[-25:]))
+    sys.exit(1)
+
 # ── init is not repeatable without --force ──────────────────────────────────
 out = interact(["init"], [("Choose a passphrase", PASS)])
 check("second init refuses", "already exists" in out, out[-200:])

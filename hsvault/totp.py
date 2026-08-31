@@ -47,9 +47,22 @@ def provisioning_uri(secret_b32: str, account: str, issuer: str = "Handshake") -
 
 
 def qr_ascii(uri: str) -> str:
-    """Rendered locally. The secret never leaves this machine — no QR service,
-    no image upload, nothing over the network."""
-    import qrcode, io
+    """Render the enrolment QR in the terminal.
+
+    Always local. The secret never leaves this machine — no QR web service, no
+    image upload, nothing over the network. That rules out the convenient
+    option of shelling out to an online generator, which would hand a
+    stranger the second factor.
+
+    `qrcode` is a pure-Python dependency, so it installs anywhere Python does.
+    If it is somehow absent we degrade to manual entry rather than failing:
+    setup must not be blocked by a rendering library.
+    """
+    try:
+        import qrcode, io
+    except ImportError:
+        return ("  (install `qrcode` to show a scannable code here — "
+                "use manual entry below)\n")
     q = qrcode.QRCode(border=1)
     q.add_data(uri)
     q.make(fit=True)

@@ -24,7 +24,10 @@ classifiers = [
 
 # Deliberately minimal. Every dependency is one more thing that has to install
 # on a freshly wiped machine during a recovery.
-dependencies = ["cryptography>=41"]
+dependencies = [
+  "cryptography>=41",   # AES-GCM
+  "qrcode>=7.4",        # pure-Python; renders the 2FA enrolment code locally
+]
 
 [project.optional-dependencies]
 postgres = ["psycopg[binary]>=3.1"]
