@@ -54,13 +54,26 @@ mkdir -p "$BIN"
 ln -sf "$APP/bin/handshake" "$BIN/handshake"
 ok "handshake -> $BIN/handshake"
 
-if ! command -v handshake >/dev/null 2>&1; then
+case ":$PATH:" in
+  *":$BIN:"*) ON_PATH=1 ;;
+  *)          ON_PATH=0 ;;
+esac
+if [ "$ON_PATH" -eq 0 ]; then
   LINE="export PATH=\"$BIN:\$PATH\""
   for rc in "$HOME/.zshrc" "$HOME/.bashrc"; do
     [ -f "$rc" ] || continue
-    grep -qF "$BIN" "$rc" 2>/dev/null || { printf '\n# Handshake\n%s\n' "$LINE" >> "$rc"; say "added $BIN to PATH in $rc"; }
+    # Match the expanded path or the $HOME form, so re-running does not stack
+    # up duplicate lines in a shell profile.
+    if grep -qE "(^|[^#])export PATH=.*(\$HOME|$HOME)/\.local/bin" "$rc" 2>/dev/null \
+       || grep -qF "$BIN" "$rc" 2>/dev/null; then
+      continue
+    fi
+    printf '\n# Handshake\n%s\n' "$LINE" >> "$rc"
+    say "added $BIN to PATH in $rc"
   done
   warn "open a new terminal, or run:  $LINE"
+else
+  ok "already on your PATH"
 fi
 
 # ── agent CLIs ──────────────────────────────────────────────────────────────
