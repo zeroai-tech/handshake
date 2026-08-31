@@ -1,0 +1,20 @@
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.code-review-graph/
+.pytest_cache/
+
+# Local state and personal tooling. Never publish.
+config.json
+session.json
+vault.db
+*.env
+.env*
+*.pem
+*.key
+recovery*.txt
+import_existing.py
+personal/

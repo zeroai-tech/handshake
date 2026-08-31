@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Run Handshake from a clone, with or without a virtualenv.
+#
+# Prefers the repo's own .venv (how a clone is usually set up), then an
+# interpreter that already has `cryptography`, so `pip install -e .` works too.
+set -euo pipefail
+HS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+if [ -x "$HS_DIR/.venv/bin/python" ]; then
+  exec "$HS_DIR/.venv/bin/python" "$HS_DIR/handshake.py" "$@"
+fi
+for py in python3 python; do
+  if command -v "$py" >/dev/null 2>&1 && "$py" -c 'import cryptography' 2>/dev/null; then
+    exec "$py" "$HS_DIR/handshake.py" "$@"
+  fi
+done
+echo "  Handshake needs Python 3.10+ with 'cryptography'. Set it up with:" >&2
+echo "    python3 -m venv $HS_DIR/.venv && $HS_DIR/.venv/bin/pip install -e $HS_DIR" >&2
+exit 1
