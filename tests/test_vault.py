@@ -10,6 +10,7 @@ os.environ["HANDSHAKE_HOME"] = tempfile.mkdtemp(prefix="handshake-test-")
 
 from hsvault import crypto, totp                      # noqa: E402
 from hsvault.backends.sqlite import SqliteBackend     # noqa: E402
+from hsvault.session import same_network as sn        # noqa: E402
 
 
 class Crypto(unittest.TestCase):
@@ -132,6 +133,39 @@ class Backend(unittest.TestCase):
 
     def test_vault_file_is_owner_only(self):
         self.assertEqual(oct(os.stat(self.db.path).st_mode & 0o777), "0o600")
+
+
+class NetworkBinding(unittest.TestCase):
+    """A session is pinned to a network, not to an address.
+
+    Regression guard: CI caught a macOS runner egressing from a NAT pool
+    (…117.183 then …117.182 seconds apart), which under exact matching killed
+    a live session. Corporate proxies, CGNAT and mobile carriers all do this.
+    """
+
+    def test_same_pool_is_tolerated(self):
+        self.assertTrue(sn("13.105.117.183", "13.105.117.182"))
+
+    def test_strict_mode_rejects_the_same_pool(self):
+        self.assertFalse(sn("13.105.117.183", "13.105.117.182", strict=True))
+
+    def test_different_network_is_refused(self):
+        self.assertFalse(sn("13.105.117.183", "203.0.113.9"))
+
+    def test_adjacent_subnet_is_refused(self):
+        self.assertFalse(sn("13.105.117.183", "13.105.118.1"))
+
+    def test_ipv6_compares_the_64(self):
+        self.assertTrue(sn("2001:db8:1:2::5", "2001:db8:1:2::9"))
+        self.assertFalse(sn("2001:db8:1:2::5", "2001:db8:9:9::5"))
+
+    def test_protocol_flip_is_refused(self):
+        self.assertFalse(sn("13.105.117.183", "2001:db8::1"))
+
+    def test_unknown_address_does_not_lock_you_out(self):
+        """Better to keep working than to strand someone whose IP lookup failed."""
+        self.assertTrue(sn("13.105.117.183", None))
+        self.assertTrue(sn(None, "13.105.117.183"))
 
 
 class ConfigMigration(unittest.TestCase):

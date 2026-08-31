@@ -202,7 +202,8 @@ def cmd_unlock(a):
         else:
             print("\n  No OS keychain available here; passphrase not saved.")
 
-    tok = session.begin(kek, ttl=a.ttl, bind_ip=not a.no_ip_bind)
+    tok = session.begin(kek, ttl=a.ttl, bind_ip=not a.no_ip_bind,
+                        strict_ip=a.strict_ip)
     ip = session.status().get("ip")
     db.log(int(time.time()), "unlock", None, ip, True, None)
     print(f"\n  Unlocked for {a.ttl // 60} minutes" + (f", bound to {ip}" if ip else ""))
@@ -504,7 +505,10 @@ def build_parser():
     u = sub.add_parser("unlock", help="open a session (passphrase + 2FA)")
     u.add_argument("--code", help="6-digit code (otherwise prompted)")
     u.add_argument("--ttl", type=int, default=session.DEFAULT_TTL, help="seconds (default 1800)")
-    u.add_argument("--no-ip-bind", action="store_true", help="do not pin to this public IP")
+    u.add_argument("--no-ip-bind", action="store_true", help="do not pin to a network at all")
+    u.add_argument("--strict-ip", action="store_true",
+                   help="require the exact same public IP, not just the same /24;"
+                        " only sensible on a fixed address")
     u.add_argument("--remember", action="store_true", help="save the passphrase to the OS keychain")
     u.set_defaults(fn=cmd_unlock)
 

@@ -21,6 +21,7 @@ factors, or that silently weakens a stated guarantee:
 - Using a wrapped DEK against a secret it was not wrapped for
 - Bypassing TOTP, or opening a session without a passphrase
 - Forging, replaying, or extending a session token
+- Spending a session token from a different network than it was issued to
 - Making the KDF cheaper than the stated parameters
 - Plaintext, keys, or passphrases written anywhere on disk
 - A crash or error message that leaks a secret's value
@@ -53,6 +54,7 @@ and a security bug — report it under this policy.
 | Second factor | TOTP (RFC 6238), SHA-1, 6 digits, 30s, ±1 step, constant-time compare |
 | Recovery | Shamir over GF(256), 2-of-3 |
 | Session token | 256 bits from `secrets.token_urlsafe`; only SHA-256 stored |
+| Session binding | Expiry, plus same /24 (IPv4) or /64 (IPv6) as the unlock |
 
 No custom primitives. AES-GCM comes from [`cryptography`](https://cryptography.io);
 scrypt, HMAC and SHA-256 from the Python standard library. The Shamir and TOTP

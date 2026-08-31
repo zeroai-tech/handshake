@@ -38,8 +38,8 @@ brief, and visible.**
   passphrase can be remembered by your OS keychain; the six-digit code cannot be
   remembered by anything, which is precisely the point — a human is in the loop
   at least once per session.
-- Unlocking produces a session token that expires and is pinned to your public
-  IP. Agents spend that token. They cannot mint one.
+- Unlocking produces a session token that expires and is pinned to your
+  network. Agents spend that token. They cannot mint one.
 - Every read is appended to a log with the reason the caller gave. Afterwards
   you can answer the question that actually matters: *what did that agent
   touch?*
@@ -62,6 +62,7 @@ Here is the honest table.
 | The hosting API token | **No.** They can delete or corrupt the vault; they cannot decrypt it. |
 | Your laptop, powered off | **No.** No plaintext at rest, no key file. |
 | Your laptop, while a session is open | **Yes**, if they also have the session token. It is in the terminal that opened it. |
+| A session token, used from another network | **No.** The binding refuses it. |
 | Your passphrase, and nothing else | **No.** They still need a code from your phone. |
 | Your phone, and nothing else | **No.** They still need the passphrase. |
 | Your passphrase **and** your phone | **Yes.** That is what being you means. |
@@ -123,10 +124,22 @@ the session file is inert — a stolen laptop yields nothing unless the thief al
 has the token out of your terminal scrollback.
 
 Three conditions must all hold for a session to be spendable: the token matches,
-it has not expired (30 minutes by default), and your public IP is unchanged.
-Fail any one and you authenticate again. The IP binding is best-effort by
-design: if the public IP cannot be determined, the session is simply not
-IP-bound rather than refusing to work on a train.
+it has not expired (30 minutes by default), and you are still on the same
+network. Fail any one and you authenticate again.
+
+"Same network" means the same /24, or the same /64 on IPv6 — not the same
+address. Large egress pools hand out a different address per connection, and
+CGNAT, corporate proxies, mobile carriers and CI runners all do it; comparing
+exact addresses logs people out while they sit perfectly still. We found this
+the honest way, by watching a macOS CI runner move from `…117.183` to `…117.182`
+between two calls and kill its own session. The prefix keeps the property that
+matters — a token replayed from another network is refused — without the false
+positives. `handshake unlock --strict-ip` restores exact matching if you are on
+a fixed address and want it.
+
+The binding is best-effort in one further respect: if the public IP cannot be
+determined at all, the session is simply not network-bound rather than refusing
+to work on a train.
 
 ### Recovery
 
