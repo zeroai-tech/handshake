@@ -146,6 +146,17 @@ def cmd_init(a):
     print("\n  Scan this with your authenticator app")
     print("  (Google Authenticator, 1Password, Aegis, Raivo — any TOTP app):\n")
     print(totp.qr_ascii(uri))
+    # A terminal QR fails on some setups — tiny fonts, odd colour schemes,
+    # screen readers. Offer a real image rather than making the user retype a
+    # 32-character key.
+    if a.qr_file:
+        qp = Path(a.qr_file).expanduser()
+        if totp.qr_png(uri, qp):
+            qp.chmod(0o600)
+            print(f"  Also written as an image: {qp}")
+            print("  Open it, scan it, then DELETE it — it is your second factor.\n")
+        else:
+            print("  (could not write the image; use the key below)\n")
     print(f"  If the QR will not scan, type this key in by hand:\n\n    {tsec}\n")
 
     code = input("  Enter the 6-digit code to prove it is set up: ").strip()
@@ -607,6 +618,7 @@ def cmd_setup(a):
         print("\n  Step 2 of 3 — create the vault")
         a.account = a.account or "handshake"
         a.force = False
+        a.qr_file = getattr(a, "qr_file", None)
         cmd_init(a)
 
     print("  Step 3 of 3 — wire up your agent tools\n")
@@ -673,6 +685,7 @@ def build_parser():
     st.add_argument("--backend", choices=BACKENDS)
     st.add_argument("--account", help="label shown in your authenticator app")
     st.add_argument("--reconfigure", action="store_true", help="change where the vault lives")
+    st.add_argument("--qr-file", metavar="PATH", help="also write the QR as a PNG")
     st.set_defaults(fn=cmd_setup)
 
     ag = sub.add_parser("agents", help="register the MCP server with your agent CLIs")
@@ -696,6 +709,8 @@ def build_parser():
     i = sub.add_parser("init", help="create the vault (2FA is mandatory)")
     i.add_argument("--account", help="label shown in your authenticator app")
     i.add_argument("--force", action="store_true", help="destroy an existing vault")
+    i.add_argument("--qr-file", metavar="PATH",
+                   help="also write the QR as a PNG, for when the terminal one will not scan")
     i.set_defaults(fn=cmd_init)
 
     u = sub.add_parser("unlock", help="open a session (passphrase + 2FA)")

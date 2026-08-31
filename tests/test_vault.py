@@ -92,6 +92,61 @@ class Totp(unittest.TestCase):
         self.assertFalse(totp.verify(s, totp.code_at(s, time.time() - 3000)))
 
 
+class QrRendering(unittest.TestCase):
+    """The QR is how 2FA gets enrolled. If it will not scan, setup stalls."""
+
+    URI = "otpauth://totp/Handshake:demo?secret=JBSWY3DPEHPK3PXP&issuer=Handshake"
+
+    def test_colour_render_is_dark_on_light(self):
+        """A QR must be dark modules on a light field or scanners refuse it."""
+        out = totp.qr_ascii(self.URI, color=True)
+        self.assertIn("48;5;15", out)               # white background present
+        self.assertIn("48;5;16", out)               # black modules present
+        self.assertTrue(out.rstrip().endswith("\033[0m"))
+
+    def test_modules_are_two_cells_wide(self):
+        """Terminal cells are ~2:1, so one cell per module renders a stretched
+        code that many phones will not read."""
+        plain = totp.qr_ascii(self.URI, color=False)
+        rows = [r for r in plain.splitlines() if r.strip()]
+        width = len(rows[0]) - 2                    # minus the leading indent
+        self.assertEqual(width % 2, 0)
+        self.assertEqual(width // 2, len(rows))     # square in modules
+
+    def test_quiet_zone_is_present(self):
+        """Without a margin, scanners cannot find the code's edges.
+
+        The border row must be entirely light modules. In the no-colour
+        rendering a light module is a filled block, so a uniform first row is
+        what a correct quiet zone looks like there.
+        """
+        rows = [r[2:] for r in totp.qr_ascii(self.URI, color=False).splitlines()]
+        self.assertTrue(rows[0])
+        self.assertEqual(set(rows[0]), {"\u2588"}, "top border is not a clean quiet zone")
+        self.assertEqual(set(rows[-1]), {"\u2588"}, "bottom border is not a clean quiet zone")
+        self.assertEqual(rows[len(rows) // 2][:2], "\u2588\u2588", "no left margin")
+
+    def test_no_colour_when_not_a_tty(self):
+        """Piped output must not be full of escape codes."""
+        self.assertNotIn("\033[", totp.qr_ascii(self.URI, color=False))
+
+    def test_png_is_a_valid_png(self):
+        import tempfile, struct
+        path = os.path.join(tempfile.mkdtemp(), "qr.png")
+        self.assertTrue(totp.qr_png(self.URI, path))
+        with open(path, "rb") as f:
+            raw = f.read()
+        self.assertEqual(raw[:8], b"\x89PNG\r\n\x1a\n")
+        w, h = struct.unpack(">II", raw[16:24])
+        self.assertEqual(w, h)                      # square
+        self.assertGreater(w, 100)
+        # IEND is a full chunk: 4-byte length, tag, then CRC.
+        self.assertEqual(raw[-12:], b"\x00\x00\x00\x00IEND\xae\x42\x60\x82")
+
+    def test_missing_secret_does_not_crash_rendering(self):
+        self.assertIsInstance(totp.qr_ascii("otpauth://totp/x", color=False), str)
+
+
 class Backend(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp()
