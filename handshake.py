@@ -477,6 +477,185 @@ def cmd_passwd(a):
     print("  Your authenticator code is unchanged.")
 
 
+
+# ── registering with agent CLIs ─────────────────────────────────────────────
+MCP_PATH = str(Path(__file__).resolve().parent / "bin" / "handshake-mcp.mjs")
+
+
+def _merge_json(path: Path, mutate) -> bool:
+    """Read a JSON config, let `mutate` change it, write it back.
+
+    Never clobbers: an unreadable or malformed file is left alone rather than
+    overwritten, because these files hold other tools' configuration.
+    """
+    try:
+        data = json.loads(path.read_text()) if path.exists() and path.stat().st_size else {}
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    mutate(data)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data, indent=2))
+        return True
+    except OSError:
+        return False
+
+
+def _register_claude_code() -> str | None:
+    import shutil
+    if not shutil.which("claude"):
+        return None
+    probe = subprocess.run(["claude", "mcp", "list"], capture_output=True, text=True, timeout=60)
+    if "handshake" in (probe.stdout or ""):
+        return "Claude Code (already registered)"
+    r = subprocess.run(["claude", "mcp", "add", "handshake", "--scope", "user",
+                        "--", "node", MCP_PATH], capture_output=True, text=True, timeout=60)
+    return "Claude Code" if r.returncode == 0 else None
+
+
+def _register_json_agent(label: str, path: Path, key: str) -> str | None:
+    if not path.parent.exists():
+        return None
+    entry = {"command": "node", "args": [MCP_PATH]}
+
+    def mutate(d):
+        d.setdefault(key, {})["handshake"] = entry
+    return label if _merge_json(path, mutate) else None
+
+
+def _register_codex() -> str | None:
+    """Codex uses TOML. Append a block only if one is not already there."""
+    path = Path.home() / ".codex" / "config.toml"
+    if not path.parent.exists():
+        return None
+    body = path.read_text() if path.exists() else ""
+    if "mcp_servers.handshake" in body:
+        return "Codex (already registered)"
+    block = ('\n[mcp_servers.handshake]\ncommand = "node"\n'
+             f'args = ["{MCP_PATH}"]\n')
+    try:
+        with path.open("a") as f:
+            f.write(block)
+        return "Codex"
+    except OSError:
+        return None
+
+
+def cmd_agents(a):
+    """Register the MCP server with every agent CLI on this machine."""
+    home = Path.home()
+    done = [x for x in (
+        _register_claude_code(),
+        _register_codex(),
+        _register_json_agent("Gemini CLI", home / ".gemini" / "settings.json", "mcpServers"),
+        _register_json_agent("Cursor", home / ".cursor" / "mcp.json", "mcpServers"),
+        _register_json_agent("Windsurf",
+                             home / ".codeium" / "windsurf" / "mcp_config.json", "mcpServers"),
+    ) if x]
+    if a.quiet and not done:
+        return
+    if done:
+        for d in done:
+            print(f"  ✓ {d}")
+        print("\n  Restart those tools to pick up the change.")
+    else:
+        print("  No agent CLI found to register with.")
+        print(f"  To wire one up by hand, run this MCP server:\n    node {MCP_PATH}")
+    if not a.quiet:
+        print("\n  Agents can read and write secrets, but cannot unlock the vault —")
+        print("  there is no unlock tool for them to call.")
+
+
+# ── the one command a new user runs ─────────────────────────────────────────
+def cmd_setup(a):
+    """Storage, vault, 2FA and agent wiring, in one pass."""
+    print("\n  Handshake setup\n")
+    cfg = store.load_config()
+    configured = bool(cfg.get("backend") or cfg.get("account_id"))
+
+    if configured and not a.reconfigure:
+        try:
+            print(f"  Storage already configured: {store.backend().health()}")
+        except RuntimeError:
+            configured = False
+    if not configured or a.reconfigure:
+        print("  Step 1 of 3 — where should the vault live?")
+        name = a.backend or _choose_backend()
+        cfg = store.load_config()
+        cfg["backend"] = name
+        cfg[name] = {**cfg.get(name, {}), **_collect(name)}
+        store.save_config(cfg)
+        try:
+            db = store.backend(refresh=True)
+            db.ensure_schema()
+            print(f"\n  ✓ {db.health()}")
+        except RuntimeError as e:
+            print(f"\n  Could not reach it:\n    {e}\n")
+            if name == "supabase":
+                print("  If the tables are missing, run `handshake setup-sql`, paste the")
+                print("  output into the Supabase SQL editor, then run setup again.\n")
+            sys.exit(1)
+
+    db = store.backend(refresh=True)
+    db.ensure_schema()
+    if db.get_vault():
+        print("\n  A vault already exists here — keeping it.")
+        print("  (`handshake init --force` would destroy it and everything in it.)")
+    else:
+        print("\n  Step 2 of 3 — create the vault")
+        a.account = a.account or "handshake"
+        a.force = False
+        cmd_init(a)
+
+    print("  Step 3 of 3 — wire up your agent tools\n")
+    cmd_agents(argparse.Namespace(quiet=False))
+    print("\n  Done. Start a session whenever you need one:\n")
+    print("      handshake unlock\n")
+    print("  Then add your first credential:\n")
+    print("      handshake put openai/api-key -s <token>")
+    print("      handshake import-env .env -s <token>      # or a whole file at once\n")
+
+
+# ── bulk adding ─────────────────────────────────────────────────────────────
+def cmd_import_env(a):
+    """Load every KEY=value from a .env-style file.
+
+    The fast way to fill a new vault. Existing names are replaced unless
+    --skip-existing is given, so re-running after editing the file is safe.
+    """
+    kek, db = _kek_or_die(a), _db()
+    path = Path(a.file).expanduser()
+    if not path.exists():
+        _die(f"No such file: {path}")
+
+    added = skipped = 0
+    for raw in path.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key, val = key.strip().removeprefix("export ").strip(), val.strip()
+        # Strip one layer of matching quotes, the way a shell would.
+        if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
+            val = val[1:-1]
+        if not key or not val:
+            continue
+        name = f"{a.prefix}{key}" if a.prefix else key
+        if a.skip_existing and db.get_secret(name):
+            skipped += 1
+            continue
+        dek = crypto.new_dek()
+        db.put_secret(name, crypto.wrap_dek(kek, dek, name),
+                      crypto.seal(dek, val.encode(), aad=name.encode()),
+                      a.note or f"imported from {path.name}", a.category, int(time.time()))
+        added += 1
+        print(f"    + {name}")
+    db.log(int(time.time()), "import-env", None, _ip(), True, f"{added} from {path.name}")
+    print(f"\n  {added} added" + (f", {skipped} skipped (already present)" if skipped else ""))
+
+
 # ── argument parsing ────────────────────────────────────────────────────────
 def build_parser():
     p = argparse.ArgumentParser(
@@ -489,6 +668,23 @@ def build_parser():
     def with_session(sp):
         sp.add_argument("-s", "--session", help="token from `handshake unlock`")
         return sp
+
+    st = sub.add_parser("setup", help="START HERE — storage, vault, 2FA and agents in one go")
+    st.add_argument("--backend", choices=BACKENDS)
+    st.add_argument("--account", help="label shown in your authenticator app")
+    st.add_argument("--reconfigure", action="store_true", help="change where the vault lives")
+    st.set_defaults(fn=cmd_setup)
+
+    ag = sub.add_parser("agents", help="register the MCP server with your agent CLIs")
+    ag.add_argument("--quiet", action="store_true")
+    ag.set_defaults(fn=cmd_agents)
+
+    ie = with_session(sub.add_parser("import-env", help="add every KEY=value from a .env file"))
+    ie.add_argument("file")
+    ie.add_argument("--prefix", default="", help="prepend to each name, e.g. prod/")
+    ie.add_argument("--category"); ie.add_argument("--note")
+    ie.add_argument("--skip-existing", action="store_true")
+    ie.set_defaults(fn=cmd_import_env)
 
     c = sub.add_parser("connect", help="choose and configure where the vault lives")
     c.add_argument("--backend", choices=BACKENDS)

@@ -164,6 +164,30 @@ check("audit recorded the read reason", "e2e test" in r.stdout, r.stdout[-400:])
 check("audit recorded the failed unlock", "bad passphrase" in r.stdout)
 check("audit never contains the value", "sk-live-123" not in r.stdout)
 
+# ── bulk import from a .env file ────────────────────────────────────────────
+envfile = os.path.join(HOME, "sample.env")
+Path(envfile).write_text(
+    "# a comment\n"
+    "OPENAI_API_KEY=sk-env-aaa\n"
+    "export QUOTED_KEY=\"has spaces here\"\n"
+    "SINGLE='single quoted'\n"
+    "EMPTY=\n"
+    "malformed line without equals\n")
+r = run(["import-env", envfile, "--prefix", "dev/", "--category", "dev", "-s", TOK])
+check("import-env adds each key", "3 added" in r.stdout, r.stdout + r.stderr)
+check("import-env applies the prefix", "dev/OPENAI_API_KEY" in r.stdout)
+check("import-env skips comments and junk", "malformed" not in r.stdout)
+
+r = run(["get", "dev/OPENAI_API_KEY", "-s", TOK])
+check("imported value is exact", r.stdout.strip() == "sk-env-aaa", repr(r.stdout))
+r = run(["get", "dev/QUOTED_KEY", "-s", TOK])
+check("import-env strips double quotes", r.stdout.strip() == "has spaces here", repr(r.stdout))
+r = run(["get", "dev/SINGLE", "-s", TOK])
+check("import-env strips single quotes", r.stdout.strip() == "single quoted", repr(r.stdout))
+
+r = run(["import-env", envfile, "--prefix", "dev/", "--skip-existing", "-s", TOK])
+check("import-env --skip-existing is idempotent", "3 skipped" in r.stdout, r.stdout)
+
 # ── export / import between backends ────────────────────────────────────────
 exp = os.path.join(HOME, "vault.json")
 r = run(["export", "--out", exp, "-s", TOK])
@@ -175,7 +199,7 @@ check("export is owner-only", oct(os.stat(exp).st_mode & 0o777) == "0o600")
 ENV2 = {**ENV, "HANDSHAKE_SQLITE_PATH": os.path.join(HOME, "vault2.db")}
 r = subprocess.run([PY_, str(ROOT / "handshake.py"), "import", exp],
                    capture_output=True, text=True, env=ENV2, timeout=60)
-check("import into a second backend", "imported 1 secret" in r.stdout, r.stdout + r.stderr)
+check("import into a second backend", "imported 4 secret" in r.stdout, r.stdout + r.stderr)
 
 # ── recovery shares actually work ───────────────────────────────────────────
 out = interact(["recover"], [("Paste two recovery shares", shares[0] + "\n" + shares[2] + "\n")])

@@ -5,6 +5,13 @@
 An agent can *use* a credential. Only a person can *unlock* the vault.
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/zeroai-tech/handshake/main/install.sh | bash
+handshake setup
+```
+
+Then, from anywhere:
+
+```bash
 handshake unlock                                  # passphrase + code from your phone
 handshake run -e OPENAI_API_KEY -- claude         # key exists only inside that process
 handshake log                                     # what was read, when, and why
@@ -48,6 +55,170 @@ It was built in one sitting because the author was about to wipe a laptop that
 held the only copy of every credential for a working company. That deadline
 shaped two decisions worth naming: recovery is taken as seriously as encryption,
 and the tool must run on a machine with nothing installed on it.
+
+---
+
+## Install
+
+One command. It installs into `~/.handshake/app`, keeps its own Python
+environment so nothing touches your system, puts `handshake` on your `PATH`,
+and registers itself with any agent CLI you have.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zeroai-tech/handshake/main/install.sh | bash
+```
+
+Re-run it any time to update.
+
+<details>
+<summary>Prefer to install by hand?</summary>
+
+```bash
+git clone https://github.com/zeroai-tech/handshake.git ~/.handshake/app
+cd ~/.handshake/app
+python3 -m venv .venv && ./.venv/bin/pip install -e .
+ln -s ~/.handshake/app/bin/handshake ~/.local/bin/handshake
+handshake agents          # register with your agent CLIs
+```
+</details>
+
+## Set it up
+
+```bash
+handshake setup
+```
+
+That is the whole thing. It takes about a minute and walks through three steps:
+
+1. **Where the vault lives.** Pick a backend from the list. If you are not
+   sure, choose Cloudflare D1 — the free tier is ample and it survives your
+   laptop. SQLite is fine for trying it out.
+2. **Create the vault.** You choose a passphrase, then a QR code appears in
+   your terminal. Scan it with Google Authenticator, 1Password, Aegis, Raivo —
+   any TOTP app. Type the 6-digit code back. **Nothing is created until that
+   code checks out**, so you cannot end up with a vault whose 2FA does not work.
+3. **Wire up your agents.** It finds Claude Code, Codex, Gemini CLI, Cursor and
+   Windsurf and registers the MCP server with whichever are present.
+
+Then it prints a **recovery card**: three recovery shares plus the address of
+your vault. Photograph it or print it before you close the window — the shares
+are generated once and stored nowhere, by anyone, including us.
+
+> **Why can't this be fully automated?** Because the point of the tool is that
+> a machine cannot open your vault alone. The passphrase has to come out of
+> your head and the code has to come off your phone. If a script could do it,
+> so could anything else running on your machine.
+
+## Adding credentials
+
+`put` adds a new credential, and updates one that already exists — the same
+command either way, so re-running is always safe.
+
+```bash
+handshake unlock                                    # start a session first
+export HANDSHAKE_SESSION=<the token it prints>      # saves typing -s every time
+
+handshake put openai/api-key                        # prompts, so it stays out of history
+handshake put openai/api-key --value sk-...         # or pass it directly
+handshake put db/prod-url --category prod --note "read replica"
+cat key.pem | handshake put ssh/deploy-key --value -   # a whole file
+```
+
+**Names are yours to choose.** A `category/name` shape (`prod/stripe`,
+`dev/openai`) keeps `handshake list` readable once you have thirty of them, but
+nothing enforces it.
+
+**Bring a whole `.env` file in at once:**
+
+```bash
+handshake import-env .env
+handshake import-env .env.production --prefix prod/ --category prod
+handshake import-env .env --skip-existing            # only add what is missing
+```
+
+It ignores comments and blank lines, handles `export FOO=bar`, and strips
+quotes the way a shell would. Once it is in the vault, delete the file.
+
+**Bringing in an existing vault** from another backend — see
+[Storage backends](#storage-backends) — is `handshake export` then
+`handshake import`.
+
+## Everyday use
+
+```bash
+handshake list                          # names and notes, never values
+handshake get openai/api-key            # print one value
+handshake get openai/api-key --reason "deploying the worker"
+handshake rm old/key                    # asks first; -y to skip
+handshake log                           # who read what, when, and why
+handshake status                        # is anything open?
+handshake lock                          # close the session now
+```
+
+Prefer `run` over `get` whenever you are launching something. The value goes
+into that one process and nowhere else — not your shell history, not your
+scrollback, not your environment:
+
+```bash
+handshake run -e OPENAI_API_KEY -- claude
+handshake run -e OPENAI_API_KEY -e ANTHROPIC_API_KEY -- aider
+handshake run -e DATABASE_URL=prod/postgres -- ./migrate.sh
+```
+
+Use `VAR=secret-name` when the environment variable is not named the same as
+the secret.
+
+## Sessions
+
+A session lasts 30 minutes by default, then everything locks again.
+
+```bash
+handshake unlock --ttl 7200      # two hours instead
+handshake unlock --remember      # save the passphrase to your OS keychain
+handshake forget                 # stop saving it
+```
+
+`--remember` puts the passphrase in the macOS Keychain or your Linux secret
+service — never in a file, never encoded in a config. **The 6-digit code is
+still required every time**, which is what makes saving the passphrase safe:
+on its own it opens nothing.
+
+## Housekeeping
+
+```bash
+handshake passwd                 # change the passphrase; secrets are untouched
+handshake recover                # lost the passphrase or the phone? use two shares
+handshake export --out backup.json   # encrypted backup, safe to store anywhere
+handshake agents                 # re-register with agent CLIs after installing one
+```
+
+`passwd` re-wraps the small per-secret keys rather than re-encrypting your
+data, so it is quick and cannot corrupt a value even if it is interrupted. Your
+authenticator code is unchanged by it.
+
+## Using it with an agent
+
+`bin/handshake-mcp.mjs` is an MCP server exposing `status`, `list`, `get`, `put`
+and `log`.
+
+**It has no unlock tool.** Not disabled, not permission-gated — absent. There is
+no way to pass a passphrase or a code through it. An agent can spend a session
+you opened; it can never open one. That asymmetry is the security model, so it
+is enforced by what the interface does not contain rather than by a check
+someone can be talked out of.
+
+`handshake setup` registers it automatically with Claude Code, Codex, Gemini
+CLI, Cursor and Windsurf. Run `handshake agents` again after installing a new
+one. Anything else that speaks MCP over stdio can point at
+`~/.handshake/app/bin/handshake-mcp.mjs`; for agents that speak no MCP at all,
+`handshake run` covers the same ground with no integration whatsoever.
+
+A workflow that keeps the blast radius small:
+
+1. You run `handshake unlock` in a terminal and paste the token into the chat.
+2. The agent calls `handshake_get` with a stated reason when it needs something.
+3. You run `handshake lock` when the task is done, or let the TTL do it.
+4. `handshake log` afterwards shows exactly what was touched.
 
 ---
 
@@ -192,87 +363,6 @@ system of this shape. Keep it on the recovery card.
 
 ---
 
-## Install
-
-Requires Python 3.10+ and `cryptography`.
-
-```bash
-git clone https://github.com/zeroai-tech/handshake.git
-cd handshake
-python3 -m venv .venv && ./.venv/bin/pip install -e .
-ln -s "$PWD/bin/handshake" /usr/local/bin/handshake     # optional
-```
-
-Then:
-
-```bash
-handshake connect     # where should the vault live?
-handshake init        # passphrase, scan the QR, save the recovery card
-handshake unlock      # start a session
-```
-
-`init` will not create anything until you have proved 2FA works by entering a
-live code. Two-factor is not a setting you can forget to enable.
-
----
-
-## Daily use
-
-```bash
-handshake put prod/openai --category prod --note "billing account"
-handshake list -s $TOK
-handshake get prod/openai --reason "deploying the worker" -s $TOK
-handshake rm old/key -s $TOK
-handshake log --limit 50 -s $TOK
-handshake lock
-```
-
-Prefer `run` over `get` wherever you can — it never puts the value in your shell
-history, your scrollback, or your environment:
-
-```bash
-handshake run -s $TOK -e OPENAI_API_KEY -e ANTHROPIC_API_KEY -- claude
-handshake run -s $TOK -e DATABASE_URL=prod/postgres -- ./migrate.sh
-```
-
-Save the passphrase if you want; the code is still required every time:
-
-```bash
-handshake unlock --remember     # OS keychain — never a file, never base64
-handshake forget                # undo
-```
-
----
-
-## Using it with an agent
-
-`bin/handshake-mcp.mjs` is an MCP server exposing `status`, `list`, `get`, `put`
-and `log`.
-
-**It has no unlock tool.** Not disabled, not permission-gated — absent. There is
-no way to pass a passphrase or a code through it. An agent can spend a session
-you opened; it can never open one. That asymmetry is the security model, so it
-is enforced by what the interface does not contain rather than by a check
-someone can be talked out of.
-
-Claude Code:
-
-```bash
-claude mcp add handshake --scope user -- node /path/to/handshake/bin/handshake-mcp.mjs
-```
-
-Anything else that speaks MCP over stdio works the same way. For agents that
-don't, `handshake run` covers the same ground with no integration at all.
-
-A workflow that keeps the blast radius small:
-
-1. You run `handshake unlock` in a terminal and paste the token into the chat.
-2. The agent calls `handshake_get` with a stated reason when it needs something.
-3. You run `handshake lock` when the task is done, or let the TTL do it.
-4. `handshake log` afterwards shows exactly what was touched.
-
----
-
 ## Development
 
 ```bash
@@ -310,3 +400,4 @@ Apache 2.0. See [LICENSE](LICENSE).
 
 Built at [ZeroAI](https://zeroaitech.tech) and released for anyone who has the
 same problem.
+
