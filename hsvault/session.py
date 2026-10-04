@@ -21,7 +21,7 @@ without the false positives. `--strict-ip` at unlock restores exact matching for
 people on a fixed address who want it.
 """
 from __future__ import annotations
-import hashlib, json, os, secrets, time, urllib.request
+import hashlib, ipaddress, json, os, secrets, time, urllib.request
 from pathlib import Path
 
 STATE = Path(os.environ.get("HANDSHAKE_HOME", Path.home() / ".handshake"))
@@ -40,8 +40,7 @@ def public_ip(timeout: int = 6) -> str | None:
         try:
             with urllib.request.urlopen(url, timeout=timeout) as r:
                 ip = r.read().decode().strip()
-                if ip and len(ip) < 46:
-                    return ip
+                return str(ipaddress.ip_address(ip))
         except Exception:
             continue
     return None
@@ -60,17 +59,21 @@ def same_network(a: str | None, b: str | None, strict: bool = False) -> bool:
         return True
     if strict:
         return False
-    if ":" in a and ":" in b:           # IPv6 -> compare the /64
-        return a.split(":")[:4] == b.split(":")[:4]
-    if ":" in a or ":" in b:            # one flipped v4<->v6; treat as a change
+    try:
+        first, second = ipaddress.ip_address(a), ipaddress.ip_address(b)
+        if first.version != second.version: return False
+        prefix = 64 if first.version == 6 else 24
+        return ipaddress.ip_network(f'{first}/{prefix}', strict=False) == ipaddress.ip_network(f'{second}/{prefix}', strict=False)
+    except ValueError:
         return False
-    return a.split(".")[:3] == b.split(".")[:3]
 
 
 def begin(kek: bytes, ttl: int = DEFAULT_TTL, bind_ip: bool = True,
           strict_ip: bool = False) -> str:
     """Open a session and return its token — shown once, to the human."""
     STATE.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if not 60 <= ttl <= 86400:
+        raise ValueError('Session duration must be between one minute and 24 hours.')
     token = secrets.token_urlsafe(32)
     # The KEK is kept only for this session's lifetime, encrypted under the
     # token itself. Without the token the file is inert, so a stolen laptop
@@ -85,8 +88,8 @@ def begin(kek: bytes, ttl: int = DEFAULT_TTL, bind_ip: bool = True,
         "strict_ip": strict_ip,
         "started_at": int(time.time()),
     }
-    SESSION_FILE.write_text(json.dumps(rec))
-    SESSION_FILE.chmod(0o600)
+    from .files import private_write
+    private_write(SESSION_FILE, json.dumps(rec))
     return token
 
 

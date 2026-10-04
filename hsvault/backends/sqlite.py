@@ -8,7 +8,7 @@ as the disk it sits on. If the point of your vault is to survive the machine
 being wiped, use a remote backend instead.
 """
 from __future__ import annotations
-import sqlite3
+import os, sqlite3
 from pathlib import Path
 from ._sql import SqlBackend
 from .base import SQL_SCHEMA_SQLITE
@@ -20,7 +20,8 @@ class SqliteBackend(SqlBackend):
     schema = SQL_SCHEMA_SQLITE
 
     def __init__(self, cfg: dict):
-        self.path = Path(cfg.get("path") or Path.home() / ".handshake" / "vault.db").expanduser()
+        home = Path(os.environ.get('HANDSHAKE_HOME', Path.home() / '.handshake'))
+        self.path = Path(cfg.get("path") or home / 'vault.db').expanduser()
 
     def _connect(self):
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)

@@ -68,7 +68,8 @@ class Shamir(unittest.TestCase):
     def test_one_share_reveals_nothing(self):
         secret = b"A" * 32
         s = crypto.split_secret(secret, 3, 2)
-        self.assertNotEqual(crypto.combine_shares([s[0], s[0]]), secret)
+        with self.assertRaises(ValueError):
+            crypto.combine_shares([s[0], s[0]])
 
     def test_wrong_shares_do_not_silently_succeed(self):
         a = crypto.split_secret(os.urandom(32), 3, 2)

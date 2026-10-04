@@ -36,11 +36,10 @@ class SqlBackend:
         return rows[0] if rows else None
 
     def put_vault(self, salt, verifier, totp_enc, created_at, version=1) -> None:
-        # Written as delete+insert rather than an upsert because the three
-        # dialects spell upsert differently and this is a once-per-vault path.
-        self.x(f"DELETE FROM {V} WHERE id = ?", [VAULT_ID])
         self.x(f"INSERT INTO {V} (id,salt,verifier,totp_enc,created_at,version)"
-               f" VALUES (?,?,?,?,?,?)",
+               f" VALUES (?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET"
+               " salt=excluded.salt,verifier=excluded.verifier,totp_enc=excluded.totp_enc,"
+               " created_at=excluded.created_at,version=excluded.version",
                [VAULT_ID, salt, verifier, totp_enc, created_at, version])
 
     # ── secrets ─────────────────────────────────────────────────────────────
@@ -49,9 +48,10 @@ class SqlBackend:
         return rows[0] if rows else None
 
     def put_secret(self, name, wrapped_dek, ciphertext, note, category, updated_at) -> None:
-        self.x(f"DELETE FROM {S} WHERE name = ?", [name])
         self.x(f"INSERT INTO {S} (name,wrapped_dek,ciphertext,note,category,updated_at)"
-               f" VALUES (?,?,?,?,?,?)",
+               f" VALUES (?,?,?,?,?,?) ON CONFLICT(name) DO UPDATE SET"
+               " wrapped_dek=excluded.wrapped_dek,ciphertext=excluded.ciphertext,"
+               " note=excluded.note,category=excluded.category,updated_at=excluded.updated_at",
                [name, wrapped_dek, ciphertext, note, category, updated_at])
 
     def list_secrets(self) -> list[dict]:

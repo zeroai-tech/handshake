@@ -1,14 +1,5 @@
 #!/usr/bin/env node
-// Handshake MCP — lets an agent USE credentials it has been granted, and
-// nothing more.
-//
-// There is deliberately no `unlock` tool here, and no way to supply a
-// passphrase or a 2FA code. Opening the vault is a human action taken in a
-// terminal; this server can only spend a session that a human already opened,
-// and only for the lifetime that human granted.
-//
-// The session token is passed per call rather than stored, so it lives in the
-// conversation and disappears with it. A new chat has no token and must ask.
+// Bearer tokens grant whole-vault access to trusted tools. See SECURITY.md.
 import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import path from 'node:path'
@@ -16,14 +7,20 @@ import { fileURLToPath } from 'node:url'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const CLI = path.join(HERE, 'handshake')
-const NAME = 'handshake', VERSION = '1.0.0'
+const NAME = 'handshake', VERSION = '1.1.0'
 
-function run(args) {
+function run(args, session, input) {
   return new Promise((resolve) => {
-    const p = spawn(CLI, args, { stdio: ['ignore', 'pipe', 'pipe'] })
+    const env = { ...process.env }
+    delete env.HANDSHAKE_SESSION
+    if (session) env.HANDSHAKE_SESSION = session
+    const p = spawn(CLI, args, { env, stdio: ['pipe', 'pipe', 'pipe'] })
+    p.stdin.on('error', () => {})
+    p.stdin.end(input ?? '')
     let out = '', err = ''
     p.stdout.on('data', (d) => (out += d))
     p.stderr.on('data', (d) => (err += d))
+    p.on('error', () => resolve({ code: 1, out: '', err: 'Could not start Handshake. Check its installation.' }))
     p.on('close', (code) => resolve({ code, out: out.trim(), err: err.trim() }))
   })
 }
@@ -82,23 +79,29 @@ const TOOLS = [
 const text = (t) => ({ content: [{ type: 'text', text: t }] })
 
 async function call(name, args = {}) {
-  const s = args.session ? ['--session', args.session] : []
+  const invalid = () => ({ ...text('Invalid or missing tool arguments.'), isError: true })
+  if (!args || typeof args !== 'object' || Array.isArray(args)) return invalid()
+  if (name !== 'handshake_status' && (typeof args.session !== 'string' || !args.session || args.session.length > 512)) return invalid()
+  if (['handshake_get', 'handshake_put'].includes(name) && (typeof args.name !== 'string' || !args.name || args.name.length > 128)) return invalid()
+  if (name === 'handshake_put' && (typeof args.value !== 'string' || args.value.length > 32768)) return invalid()
+  for (const field of ['note', 'category']) if (args[field] !== undefined && typeof args[field] !== 'string') return invalid()
+  if (args.limit !== undefined && (!Number.isInteger(args.limit) || args.limit < 1 || args.limit > 100)) return invalid()
+  const result = r => ({ ...text(r.out || r.err || (r.code ? 'Handshake operation failed.' : 'Done.')), ...(r.code ? { isError: true } : {}) })
   switch (name) {
-    case 'handshake_status': return text((await run(['status'])).out)
-    case 'handshake_list':   return text((await run(['list', ...s])).out)
+    case 'handshake_status': return result(await run(['status']))
+    case 'handshake_list':   return result(await run(['list'], args.session))
     case 'handshake_get': {
-      const r = await run(['get', args.name, '--reason', args.reason || 'unspecified', ...s])
-      if (r.code !== 0) return text(r.out || r.err)
-      return text(r.out)
+      if (!args.reason || typeof args.reason !== 'string') return { ...text('A reason is required.'), isError: true }
+      return result(await run(['get', args.name, '--reason', args.reason], args.session))
     }
     case 'handshake_put': {
-      const a = ['put', args.name, '--value', args.value, ...s]
+      const a = ['put', args.name, '--value', '-']
       if (args.note) a.push('--note', args.note)
       if (args.category) a.push('--category', args.category)
-      return text((await run(a)).out)
+      return result(await run(a, args.session, args.value))
     }
     case 'handshake_log':
-      return text((await run(['log', '--limit', String(args.limit || 30), ...s])).out)
+      return result(await run(['log', '--limit', String(args.limit || 30)], args.session))
     default:
       return text(`unknown tool: ${name}`)
   }

@@ -45,8 +45,8 @@ def load_config() -> dict:
 
 def save_config(cfg: dict) -> None:
     HOME.mkdir(mode=0o700, parents=True, exist_ok=True)
-    CONF.write_text(json.dumps(cfg, indent=2))
-    CONF.chmod(0o600)
+    from ..files import private_write
+    private_write(CONF, json.dumps(cfg, indent=2))
 
 
 def _migrate(cfg: dict) -> dict:

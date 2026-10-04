@@ -1,33 +1,16 @@
 #!/usr/bin/env python3
-"""Handshake — a credential vault for people who work with AI agents.
+"""Handshake: encrypted storage and deliberate access for trusted tools.
 
-The problem it exists for: agent CLIs run with your shell's environment. Every
-API key you have exported is readable by every tool you run, and a `.env` file
-is one `cat` away from any process that can execute code on your behalf. The
-usual answer — a cloud secret manager — replaces the file with an always-valid
-token sitting in the same environment, which is not obviously better.
-
-Handshake's answer is to make the *open state* deliberate, brief, and visible:
-
-  · Credentials live encrypted in a database you control. Whoever hosts it
-    cannot read them, and neither can anyone who steals the hosting token.
-  · Opening the vault takes a passphrase and a code from your phone. The
-    passphrase can be remembered; the code cannot, so a human is always in the
-    loop at least once per session.
-  · An unlock produces a token that expires and is bound to your public IP.
-    Agents spend that token; they cannot create one.
-  · Every read is logged with a stated reason, so afterwards you can answer
-    "what did that agent actually touch?"
-
-The rule the whole design serves: an agent can USE a credential, but only a
-person can UNLOCK the vault.
+The authenticator checks the unlock procedure, not offline encryption.
+A separate key file supplies independent encryption material. See SECURITY.md
+for same-user process, bearer-token and recovery limitations.
 """
 from __future__ import annotations
 import argparse, getpass, json, os, subprocess, sys, time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from hsvault import crypto, keyring, session, store, totp
+from hsvault import crypto, keyring, session, store, totp, vault
 from hsvault.backends import BACKENDS, DESCRIPTIONS, PROMPTS
 
 KEYRING_ACCOUNT = "passphrase"
@@ -125,6 +108,8 @@ def cmd_init(a):
         _die(f"{e}\n\n  Configure storage first: handshake connect")
     if db.get_vault() and not a.force:
         _die("A vault already exists here. --force destroys it and everything in it.")
+    if a.force and db.count_secrets():
+        _die('Refusing to replace the key of a populated vault. Export it and choose a new backend instead.')
 
     print("\n  Setting up Handshake.\n")
     print("  The passphrase is the one thing that is never stored anywhere,")
@@ -135,9 +120,8 @@ def cmd_init(a):
     if p1 != getpass.getpass("  Repeat it: "):
         _die("Those did not match.")
 
-    salt = os.urandom(16)
     print("\n  Deriving key (deliberately slow)…")
-    kek = crypto.derive_kek(p1, salt)
+    factor = vault.read_keyfile(getattr(a, 'key_file', None))
 
     # Two-factor is not a setting. The vault cannot be created without it,
     # because "I'll turn it on later" is how it never gets turned on.
@@ -154,7 +138,7 @@ def cmd_init(a):
         if totp.qr_png(uri, qp):
             qp.chmod(0o600)
             print(f"  Also written as an image: {qp}")
-            print("  Open it, scan it, then DELETE it — it is your second factor.\n")
+            print("  Open it, scan it, then DELETE it — it contains your authenticator seed.\n")
         else:
             print("  (could not write the image; use the key below)\n")
     print(f"  If the QR will not scan, type this key in by hand:\n\n    {tsec}\n")
@@ -173,11 +157,8 @@ def cmd_init(a):
         except OSError:
             print(f"  ! could not delete {a.qr_file} — remove it yourself.")
 
-    db.put_vault(salt=crypto.b64e(salt), verifier=crypto.verifier(kek, salt),
-                 totp_enc=crypto.seal(kek, tsec.encode(), aad=b"totp"),
-                 created_at=int(time.time()))
-
-    shares = crypto.split_secret(kek, 3, 2)
+    record, kek, shares = vault.create(p1, tsec, factor)
+    vault.save(db, record)
     print("\n" + "  " + "=" * 62)
     print("  ABOUT TO SHOW YOUR RECOVERY KEY")
     print("  " + "=" * 62)
@@ -223,25 +204,24 @@ def cmd_unlock(a):
     v = db.get_vault()
     if not v:
         _die("No vault here yet — run: handshake init")
-    salt = crypto.b64d(v["salt"])
-    pw = _passphrase()
-    kek = crypto.check_passphrase(pw, salt, v["verifier"])
-    if not kek:
-        db.log(int(time.time()), "unlock", None, session.public_ip(), False, "bad passphrase")
-        _die("Wrong passphrase.")
+    data = vault.bundle(v)
+    pw = _passphrase() if data and data.get('factor_id') else getpass.getpass('  Passphrase: ')
+    try:
+        kek = vault.open_key(v, pw, vault.read_keyfile(getattr(a, 'key_file', None)))
+        code = a.code or input("  6-digit code from your authenticator: ").strip()
+        vault.check_code(v, kek, code)
+    except ValueError as e:
+        detail = 'bad passphrase' if str(e) == 'Wrong passphrase.' else 'bad 2FA code' if 'code' in str(e) else 'authentication failed'
+        db.log(int(time.time()), 'unlock', None, session.public_ip(), False, detail)
+        _die(str(e))
 
-    tsec = crypto.unseal(kek, v["totp_enc"], aad=b"totp").decode()
-    code = a.code or input("  6-digit code from your authenticator: ").strip()
-    if not totp.verify(tsec, code):
-        db.log(int(time.time()), "unlock", None, session.public_ip(), False, "bad 2FA code")
-        _die("That code is not valid.")
-
-    if a.remember:
+    if a.remember and vault.bundle(v) and vault.bundle(v).get('factor_id'):
         if keyring.set(KEYRING_ACCOUNT, pw):
-            print("\n  Passphrase saved to your OS keychain. The 6-digit code is")
-            print("  still required every time — that is what keeps this safe.")
+            print("\n  Passphrase saved to your OS keychain. Keep the security key file on a separate device.")
         else:
             print("\n  No OS keychain available here; passphrase not saved.")
+    elif a.remember:
+        print('\n  Passphrase not saved: add a separate security key file first. The phone check alone is not an encryption factor.')
 
     tok = session.begin(kek, ttl=a.ttl, bind_ip=not a.no_ip_bind,
                         strict_ip=a.strict_ip)
@@ -390,6 +370,7 @@ def cmd_run(a):
              "    handshake run -e OPENAI_API_KEY -- claude")
     kek, db = _kek_or_die(a), _db()
     env = dict(os.environ)
+    env.pop('HANDSHAKE_SESSION', None)
     names = []
     for spec in a.env:
         var, _, secret = spec.partition("=")
@@ -428,8 +409,8 @@ def cmd_export(a):
     out = json.dumps(blob, indent=2, default=str)
     if a.out:
         p = Path(a.out).expanduser()
-        p.write_text(out)
-        p.chmod(0o600)
+        from hsvault.files import private_write
+        private_write(p, out)
         print(f"  exported {len(rows)} secret(s) (still encrypted) to {p}")
     else:
         print(out)
@@ -444,15 +425,17 @@ def cmd_import(a):
     db = _db()
     db.ensure_schema()
     existing = db.get_vault()
+    if existing and db.count_secrets():
+        _die('Import into empty storage instead. Replacing a populated vault can orphan existing credentials.')
     if existing and not a.force:
         _die("This backend already holds a vault. --force overwrites it.\n"
              "  Both vaults' passphrases differ; importing replaces the key material.")
     v = blob["vault"]
-    db.put_vault(v["salt"], v["verifier"], v["totp_enc"],
-                 int(v["created_at"]), int(v.get("version", 1)))
     for r in blob["secrets"]:
         db.put_secret(r["name"], r["wrapped_dek"], r["ciphertext"],
                       r.get("note"), r.get("category"), int(r["updated_at"]))
+    db.put_vault(v["salt"], v["verifier"], v["totp_enc"],
+                 int(v["created_at"]), int(v.get("version", 1)))
     db.log(int(time.time()), "import", None, session.public_ip(), True,
            f"{len(blob['secrets'])} secrets")
     print(f"  imported {len(blob['secrets'])} secret(s) into {db.health()}")
@@ -475,12 +458,9 @@ def cmd_recover(a):
     if len(shares) < 2:
         _die("Two shares are required.")
     try:
-        kek = crypto.combine_shares(shares)
+        kek = vault.recover(v, shares)
     except Exception:
         _die("Those do not look like shares.")
-    if crypto.verifier(kek, crypto.b64d(v["salt"])) != v["verifier"]:
-        db.log(int(time.time()), "recover", None, session.public_ip(), False, None)
-        _die("Those shares do not rebuild this vault.")
     tok = session.begin(kek, ttl=a.ttl, bind_ip=False)
     db.log(int(time.time()), "recover", None, session.public_ip(), True, None)
     print(f"\n  Recovered. Session token:\n\n    {tok}\n")
@@ -495,26 +475,13 @@ def cmd_passwd(a):
         _die("Too short. Twelve characters minimum.")
     if p1 != getpass.getpass("  Repeat: "):
         _die("Those did not match.")
-    salt = os.urandom(16)
     print("  Deriving key…")
-    new_kek = crypto.derive_kek(p1, salt)
-    # Only the wrapped DEKs change. The ciphertext of every secret is untouched,
-    # so this is fast and cannot corrupt a value even if it fails midway.
-    rows = db.list_secrets()
-    for meta in rows:
-        r = db.get_secret(meta["name"])
-        dek = crypto.unwrap_dek(kek, r["wrapped_dek"], r["name"])
-        db.put_secret(r["name"], crypto.wrap_dek(new_kek, dek, r["name"]),
-                      r["ciphertext"], r.get("note"), r.get("category"),
-                      int(r["updated_at"]))
-    tsec = crypto.unseal(kek, v["totp_enc"], aad=b"totp")
-    db.put_vault(crypto.b64e(salt), crypto.verifier(new_kek, salt),
-                 crypto.seal(new_kek, tsec, aad=b"totp"),
-                 int(v["created_at"]), int(v.get("version", 1)))
+    updated = vault.rotate(v, kek, p1, vault.read_keyfile(getattr(a, 'key_file', None)))
+    vault.save(db, updated)
     keyring.clear(KEYRING_ACCOUNT)
     session.end()
-    db.log(int(time.time()), "passwd", None, _ip(), True, f"{len(rows)} re-wrapped")
-    print(f"  Passphrase changed, {len(rows)} secret(s) re-wrapped, session ended.")
+    db.log(int(time.time()), "passwd", None, _ip(), True, 'master envelope updated')
+    print('  Passphrase changed atomically. Credentials and existing recovery shares are unchanged; session ended.')
     print("  Your authenticator code is unchanged.")
 
 
@@ -612,6 +579,9 @@ def cmd_agents(a):
 # ── the one command a new user runs ─────────────────────────────────────────
 def cmd_setup(a):
     """Storage, vault, 2FA and agent wiring, in one pass."""
+    if getattr(a, 'gui', False):
+        from hsvault.gui import launch
+        return launch()
     print("\n  Handshake setup\n")
     cfg = store.load_config()
     configured = bool(cfg.get("backend") or cfg.get("account_id"))
@@ -703,8 +673,8 @@ def build_parser():
     p = argparse.ArgumentParser(
         prog="handshake",
         description="An encrypted credential vault. Agents can use a credential; "
-                    "only a person can unlock the vault.")
-    p.add_argument("--version", action="version", version="handshake 1.0.0")
+                    "unlock through the local interface or CLI.")
+    p.add_argument("--version", action="version", version="handshake 1.1.0")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     def with_session(sp):
@@ -716,6 +686,8 @@ def build_parser():
     st.add_argument("--account", help="label shown in your authenticator app")
     st.add_argument("--reconfigure", action="store_true", help="change where the vault lives")
     st.add_argument("--qr-file", metavar="PATH", help="also write the QR as a PNG")
+    st.add_argument('--gui', action='store_true', help='open the guided setup window')
+    st.add_argument('--key-file', metavar='PATH', help='use a separately stored security key file')
     st.set_defaults(fn=cmd_setup)
 
     ag = sub.add_parser("agents", help="register the MCP server with your agent CLIs")
@@ -742,6 +714,7 @@ def build_parser():
     i.add_argument("--qr-file", metavar="PATH",
                    help="also write the QR as a PNG, for when the terminal one will not scan")
     i.set_defaults(fn=cmd_init)
+    i.add_argument('--key-file', metavar='PATH', help='use a separately stored security key file')
 
     u = sub.add_parser("unlock", help="open a session (passphrase + 2FA)")
     u.add_argument("--code", help="6-digit code (otherwise prompted)")
@@ -752,6 +725,7 @@ def build_parser():
                         " only sensible on a fixed address")
     u.add_argument("--remember", action="store_true", help="save the passphrase to the OS keychain")
     u.set_defaults(fn=cmd_unlock)
+    u.add_argument('--key-file', metavar='PATH', help='security key file required by this vault')
 
     g = with_session(sub.add_parser("get", help="read one secret"))
     g.add_argument("name")
@@ -801,12 +775,31 @@ def build_parser():
     rc.add_argument("--ttl", type=int, default=session.DEFAULT_TTL)
     rc.set_defaults(fn=cmd_recover)
 
-    with_session(sub.add_parser("passwd", help="change the passphrase")
-                 ).set_defaults(fn=cmd_passwd)
+    password = with_session(sub.add_parser('passwd', help='change passphrase; keep credentials and recovery shares'))
+    password.add_argument('--key-file', metavar='PATH', help='original security key file, or add one to a password-only vault')
+    password.set_defaults(fn=cmd_passwd)
+    graphical = sub.add_parser('gui', help='open the guided setup and vault status window')
+    graphical.add_argument('--no-browser', action='store_true', help='print the local address without opening a browser')
+    def gui(a):
+        from hsvault.gui import launch
+        launch(open_browser=not a.no_browser)
+    graphical.set_defaults(fn=gui)
+    factor = sub.add_parser('keyfile', help='create a separate security key file; store it on removable media')
+    factor.add_argument('--out', required=True)
+    def keyfile(a):
+        from hsvault.files import private_write
+        target = Path(a.out).expanduser()
+        if target.exists(): _die('Refusing to overwrite an existing security key file.')
+        private_write(target, vault.new_keyfile())
+        print('Security key file created. Move it to separate removable media and keep a separate backup.')
+    factor.set_defaults(fn=keyfile)
     return p
 
 
 def main():
+    if getattr(sys, 'frozen', False) and len(sys.argv) == 1:
+        from hsvault.gui import launch
+        return launch()
     a = build_parser().parse_args()
     if getattr(a, "argv", None) and a.argv and a.argv[0] == "--":
         a.argv = a.argv[1:]
@@ -815,7 +808,7 @@ def main():
     except KeyboardInterrupt:
         print("\n  cancelled")
         sys.exit(130)
-    except RuntimeError as e:
+    except (RuntimeError, ValueError, OSError) as e:
         _die(str(e))
 
 

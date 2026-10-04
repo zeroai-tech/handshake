@@ -18,3 +18,6 @@ vault.db
 recovery*.txt
 import_existing.py
 personal/
+
+output/
+.browser-tests/

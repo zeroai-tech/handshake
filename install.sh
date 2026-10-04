@@ -77,10 +77,16 @@ else
 fi
 
 # ── agent CLIs ──────────────────────────────────────────────────────────────
-"$APP/.venv/bin/python" "$APP/handshake.py" agents --quiet || true
+if [ "${HANDSHAKE_REGISTER_AGENTS:-0}" = "1" ]; then
+  "$APP/.venv/bin/python" "$APP/handshake.py" agents --quiet || true
+fi
 
 printf '\n'
 ok "installed"
-printf '\n  Next — one command, about a minute:\n\n      handshake setup\n\n'
+printf '\n  Next — one command, about a minute:\n\n      handshake gui\n\n'
 printf '  It asks for a passphrase, shows a QR code for your authenticator app,\n'
-printf '  and prints a recovery card. Nothing is created until 2FA is proven.\n\n'
+printf '  and helps save recovery shares and a separate security key file.\n\n'
+
+if [ "$(uname -s)" = "Darwin" ]; then
+  "$APP/.venv/bin/python" "$APP/scripts/create-launcher.py"
+fi

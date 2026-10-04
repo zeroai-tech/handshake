@@ -124,11 +124,17 @@ def split_secret(secret: bytes, shares: int, threshold: int) -> list[str]:
 
 
 def combine_shares(shares: list[str]) -> bytes:
+    if not 2 <= len(shares) <= 255:
+        raise ValueError('At least two distinct recovery shares are required.')
     pts = []
     for s in shares:
         idx, data = s.split("-", 1)
         pts.append((int(idx), b64d(data)))
+    if len({x for x, _ in pts}) != len(pts) or any(not 1 <= x <= 255 for x, _ in pts):
+        raise ValueError('Recovery shares must have distinct valid indices.')
     length = len(pts[0][1])
+    if not length or any(len(data) != length for _, data in pts):
+        raise ValueError('Recovery shares have different lengths.')
     out = bytearray()
     for pos in range(length):
         total = 0

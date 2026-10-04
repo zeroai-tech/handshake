@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "handshake-vault"
-version = "1.0.0"
+version = "1.1.0"
 description = "An encrypted credential vault for people who work with AI agents"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -44,3 +44,6 @@ handshake = "handshake:main"
 [tool.setuptools]
 packages = ["hsvault", "hsvault.backends"]
 py-modules = ["handshake"]
+
+[tool.setuptools.package-data]
+hsvault = ["gui_assets/*"]
