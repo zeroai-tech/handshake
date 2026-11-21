@@ -96,7 +96,7 @@ def get_backend(cfg: dict | None = None):
 #: What each backend needs from `handshake connect`, and how to ask for it.
 #: (key, prompt, secret?)
 PROMPTS = {
-    "sqlite": [("path", "Path to the vault file [~/.handshake/vault.db]", False)],
+    "sqlite": [("path", f"Path to the vault file [{HOME / 'vault.db'}]", False)],
     "d1": [("account_id", "Cloudflare account id", False),
            ("database_id", "D1 database id", False),
            ("api_token", "D1 API token (needs D1:Edit)", True)],

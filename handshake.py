@@ -13,7 +13,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from hsvault import crypto, keyring, session, store, totp, vault
 from hsvault.backends import BACKENDS, DESCRIPTIONS, PROMPTS
 
-KEYRING_ACCOUNT = "passphrase"
+# One keychain entry per vault. The default vault keeps the original account name so passphrases
+# already saved keep working; a vault under another HANDSHAKE_HOME gets its own entry, so it can
+# never be handed the default vault's passphrase (or overwrite it).
+_DEFAULT_HOME = (Path.home() / ".handshake").resolve()
+KEYRING_ACCOUNT = ("passphrase" if store.HOME.expanduser().resolve() == _DEFAULT_HOME
+                   else f"passphrase:{store.HOME.expanduser().resolve()}")
 
 
 def _die(msg: str, code: int = 1):
